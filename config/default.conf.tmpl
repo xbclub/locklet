@@ -1,0 +1,25 @@
+# locklet 默认站点: IP 或未绑定域名访问时兜底 (oneinstack 风格)
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    access_log off;
+    root __WWWROOT__/default;
+    index index.html index.htm;
+
+    location ^~ /.well-known/acme-challenge/ {
+        default_type "text/plain";
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+}
+
+# 443 默认兜底: 拒绝未知域名/IP 的 TLS 握手, 避免暴露其他 vhost 证书
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}

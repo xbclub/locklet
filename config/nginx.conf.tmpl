@@ -1,0 +1,47 @@
+user  __WWW_USER__;
+worker_processes  auto;
+error_log  __WWWLOGS__/nginx_error.log  warn;
+pid        __NGINX_PREFIX__/logs/nginx.pid;
+
+worker_rlimit_nofile 51200;
+
+events
+{
+    use epoll;
+    worker_connections 51200;
+    multi_accept on;
+}
+
+http
+{
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    server_names_hash_bucket_size 128;
+    client_header_buffer_size 32k;
+    large_client_header_buffers 4 32k;
+    client_max_body_size 50m;
+    client_body_buffer_size 256k;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 60;
+
+    server_tokens off;
+
+    gzip on;
+    gzip_min_length  1k;
+    gzip_buffers     4 16k;
+    gzip_http_version 1.1;
+    gzip_comp_level 2;
+    gzip_types text/plain text/css application/javascript application/json application/xml application/xml+rss image/svg+xml font/woff2;
+    gzip_vary on;
+    gzip_proxied   any;
+__BROTLI_CONF__
+
+    # 默认不记录全局 access log, 各 vhost 独立控制 (combined 为 nginx 内置格式)
+    access_log off;
+
+    include vhost/*.conf;
+}

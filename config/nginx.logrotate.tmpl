@@ -1,0 +1,13 @@
+__WWWLOGS__/*.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    sharedscripts
+    postrotate
+        [ -f __NGINX_PREFIX__/logs/nginx.pid ] && kill -USR1 "$(cat __NGINX_PREFIX__/logs/nginx.pid)" 2>/dev/null || true
+    endscript
+}

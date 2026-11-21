@@ -1,0 +1,7 @@
+# 运行时下载的源码包 (install.sh 自动获取)
+src/
+# 日志与临时文件
+*.log
+*.marker
+*.bak
+nohup.out

@@ -1,0 +1,21 @@
+[Unit]
+Description=The nginx HTTP and reverse proxy server
+Documentation=https://nginx.org/en/docs/
+After=network-online.target remote-fs.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=__NGINX_PREFIX__/logs/nginx.pid
+ExecStartPre=__NGINX_PREFIX__/sbin/nginx -t -q -g 'daemon on; master_process on;'
+ExecStart=__NGINX_PREFIX__/sbin/nginx -g 'daemon on; master_process on;'
+ExecReload=__NGINX_PREFIX__/sbin/nginx -g 'daemon on; master_process on;' -s reload
+ExecStop=__NGINX_PREFIX__/sbin/nginx -g 'daemon on; master_process on;' -s quit
+LimitNOFILE=65535
+TimeoutStartSec=30
+Restart=on-failure
+RestartSec=5s
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
