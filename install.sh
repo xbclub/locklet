@@ -98,22 +98,29 @@ check_root
 check_os
 
 # ---------------- 交互选择 ----------------
+mode_from_cli=0
+if [ -n "$MODE_OVERRIDE" ] || [ -n "${nginx_version_override:-}" ] || [ -n "${nginx_modules_override:-}" ]; then
+  mode_from_cli=1
+fi
+
 if [ "$AUTO" -eq 0 ] && [ "$DO_NGINX" -eq 1 ]; then
-  printf "\033[33m%s\033[0m" "nginx 安装模式:"
-  cat <<EOF
+  if [ "$mode_from_cli" -eq 0 ]; then
+    printf "\033[33m%s\033[0m" "nginx 安装模式:"
+    cat <<EOF
 
   1. 官方 stable deb 包 (nginx.org 源, 自动升级)  [推荐]
   2. 源码编译 (最小化参数 + 加固, 可选模块)
 EOF
-  read -r -p "$(printf '\033[32m%s\033[0m' '请输入选择 [1-2, 默认 1]: ')" choice
-  case "${choice:-1}" in
-    1) install_mode=deb ;;
-    2) install_mode=source ;;
-    *) log_fatal "无效选择" ;;
-  esac
+    read -r -p "$(printf '\033[32m%s\033[0m' '请输入选择 [1-2, 默认 1]: ')" choice
+    case "${choice:-1}" in
+      1) install_mode=deb ;;
+      2) install_mode=source ;;
+      *) log_fatal "无效选择" ;;
+    esac
+  fi
 
-  if [ "$install_mode" = "deb" ]; then
-    read -r -p "$(printf '\033[32m%s\033[0m' '仓库通道 stable/mainline [默认 stable]: ')" ch
+  if [ "$install_mode" = "deb" ] && [ -z "${nginx_channel_override:-}" ]; then
+    read -r -p "$(printf '\033[32m%s\033[0m' "仓库通道 stable/mainline [默认 ${nginx_channel}]: ")" ch
     [ -n "$ch" ] && nginx_channel="$ch"
   fi
 fi
@@ -157,21 +164,24 @@ fi
 
 # ---------------- 回写 options.conf ----------------
 OC="$LOCKLET_ROOT/options.conf"
-set_opt "$OC" install_mode "$install_mode"
-set_opt "$OC" nginx_channel "$nginx_channel"
-set_opt "$OC" nginx_version "$nginx_version"
-set_opt "$OC" nginx_modules "\"$nginx_modules\""
-set_opt "$OC" auto_upgrade "${auto_upgrade_override:-${auto_upgrade:-y}}"
 [ -n "$github_mirror" ] && set_opt "$OC" github_mirror "\"$github_mirror\""
 set_opt "$OC" locklet_dir "\"$LOCKLET_ROOT\""
 
-# source 模式路径回写 (deb 模式在 nginx_deb.sh 内回写官方布局)
-if [ "$install_mode" = "source" ]; then
-  set_opt "$OC" nginx_sbin "$nginx_prefix/sbin/nginx"
-  set_opt "$OC" nginx_conf "$nginx_prefix/conf"
-  set_opt "$OC" nginx_vhost_dir "$nginx_prefix/conf/vhost"
-  set_opt "$OC" nginx_ssl_dir "$nginx_prefix/conf/ssl"
-  set_opt "$OC" nginx_rewrite_dir "$nginx_prefix/conf/rewrite"
+if [ "$DO_NGINX" -eq 1 ]; then
+  set_opt "$OC" install_mode "$install_mode"
+  set_opt "$OC" nginx_channel "$nginx_channel"
+  set_opt "$OC" nginx_version "$nginx_version"
+  set_opt "$OC" nginx_modules "\"$nginx_modules\""
+  set_opt "$OC" auto_upgrade "${auto_upgrade_override:-${auto_upgrade:-y}}"
+
+  # source 模式路径回写 (deb 模式在 nginx_deb.sh 内回写官方布局)
+  if [ "$install_mode" = "source" ]; then
+    set_opt "$OC" nginx_sbin "$nginx_prefix/sbin/nginx"
+    set_opt "$OC" nginx_conf "$nginx_prefix/conf"
+    set_opt "$OC" nginx_vhost_dir "$nginx_prefix/conf/vhost"
+    set_opt "$OC" nginx_ssl_dir "$nginx_prefix/conf/ssl"
+    set_opt "$OC" nginx_rewrite_dir "$nginx_prefix/conf/rewrite"
+  fi
 fi
 
 # 重新加载最终路径
@@ -204,6 +214,7 @@ if [ "$DO_NGINX" -eq 1 ]; then
     restore_from_deb_backup     # 恢复 vhost/ssl/rewrite (先于 conf 步骤, restart 一次性加载)
     install_nginx_conf
   fi
+  install_upgrade_timer
 fi
 
 if [ "$DO_LEGO" -eq 1 ]; then

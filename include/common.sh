@@ -97,6 +97,23 @@ prepare_dirs() {
   step_ok "创建目录: $wwwroot_dir $wwwlogs_dir $nginx_vhost_dir"
 }
 
+# 部署 nginx 自动升级脚本与 systemd timer (deb: apt / source: 重编)
+install_upgrade_timer() {
+  sed -e "s|__LOCKLET_CONF__|${LOCKLET_ROOT}/options.conf|g" \
+      "$LOCKLET_ROOT/config/locklet-upgrade.sh.tmpl" > /usr/local/bin/locklet-upgrade.sh
+  chmod 0755 /usr/local/bin/locklet-upgrade.sh
+  cp -f "$LOCKLET_ROOT/config/locklet-upgrade.service.tmpl" /etc/systemd/system/locklet-upgrade.service
+  cp -f "$LOCKLET_ROOT/config/locklet-upgrade.timer.tmpl"   /etc/systemd/system/locklet-upgrade.timer
+  systemctl daemon-reload
+  if [ "${auto_upgrade:-y}" = "y" ]; then
+    systemctl enable locklet-upgrade.timer >/dev/null 2>&1
+    step_ok "自动升级 timer 已部署: locklet-upgrade.timer (每周日 04:30)"
+  else
+    systemctl disable locklet-upgrade.timer >/dev/null 2>&1
+    step_ok "自动升级已关闭 (locklet-upgrade.timer disabled)"
+  fi
+}
+
 # 获取本机所有 IPv4
 get_local_ips() {
   local ips=""

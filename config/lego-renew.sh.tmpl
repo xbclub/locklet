@@ -12,73 +12,76 @@ RENEW_DAYS=30
 fail=0
 for envf in "$SSL_ROOT"/*/renew.env; do
   [ -f "$envf" ] || continue
-  cert_dir=$(dirname "$envf")
+  # 子 shell 隔离每个域名的 renew.env 与 dns.env 环境变量, 防止多账号/多服务商凭证串号
+  (
+    cert_dir=$(dirname "$envf")
 
-  # shellcheck disable=SC1090
-  DOMAINS="" EMAIL="" SERVER="" WEBROOT="" EAB_KID="" EAB_HMAC="" TLS_SKIP_VERIFY=0
-  DNS_PROVIDER="" DNS_CRED_FILE="" DNS_RESOLVERS=""
-  . "$envf"
-
-  main_domain=$(echo "$DOMAINS" | awk '{print $1}')
-  crt="$cert_dir/certificates/$main_domain.crt"
-  if [ -f "$crt" ]; then
-    left=$(( ($(date -d "$(openssl x509 -in "$crt" -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
-    echo "[renew] $main_domain: 距到期 ${left} 天 (阈值 ${RENEW_DAYS} 天)${DNS_PROVIDER:+ [DNS-01: $DNS_PROVIDER]}"
-  else
-    echo "[renew] $main_domain: 未找到证书, 直接尝试获取"
-  fi
-
-  # DNS 凭证 (通配符/DNS-01 续期时需要)
-  if [ -n "$DNS_PROVIDER" ] && [ -n "$DNS_CRED_FILE" ] && [ -f "$DNS_CRED_FILE" ]; then
     # shellcheck disable=SC1090
-    . "$DNS_CRED_FILE"
-  fi
+    DOMAINS="" EMAIL="" SERVER="" WEBROOT="" EAB_KID="" EAB_HMAC="" TLS_SKIP_VERIFY=0
+    DNS_PROVIDER="" DNS_CRED_FILE="" DNS_RESOLVERS=""
+    . "$envf"
 
-  args=(--server "$SERVER" --path "$cert_dir" --accept-tos)
-  [ -n "${EMAIL:-}" ] && args+=(--email "$EMAIL")
-  if [ -n "$DNS_PROVIDER" ]; then
-    args+=(--dns "$DNS_PROVIDER")
-    for r in $DNS_RESOLVERS; do
-      args+=(--dns.resolvers "$r")
+    main_domain=$(echo "$DOMAINS" | awk '{print $1}')
+    crt="$cert_dir/certificates/$main_domain.crt"
+    if [ -f "$crt" ]; then
+      left=$(( ($(date -d "$(openssl x509 -in "$crt" -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
+      echo "[renew] $main_domain: 距到期 ${left} 天 (阈值 ${RENEW_DAYS} 天)${DNS_PROVIDER:+ [DNS-01: $DNS_PROVIDER]}"
+    else
+      echo "[renew] $main_domain: 未找到证书, 直接尝试获取"
+    fi
+
+    # DNS 凭证 (通配符/DNS-01 续期时需要)
+    if [ -n "$DNS_PROVIDER" ] && [ -n "$DNS_CRED_FILE" ] && [ -f "$DNS_CRED_FILE" ]; then
+      # shellcheck disable=SC1090
+      . "$DNS_CRED_FILE"
+    fi
+
+    args=(--server "$SERVER" --path "$cert_dir" --accept-tos)
+    [ -n "${EMAIL:-}" ] && args+=(--email "$EMAIL")
+    if [ -n "$DNS_PROVIDER" ]; then
+      args+=(--dns "$DNS_PROVIDER")
+      for r in $DNS_RESOLVERS; do
+        args+=(--dns.resolvers "$r")
+      done
+    else
+      args+=(--http --http.webroot "$WEBROOT")
+    fi
+    # 关闭 glob 展开, 防止 *.example.com 意外匹配本地文件名
+    set -f
+    for d in $DOMAINS; do
+      args+=(--domains "$d")
     done
-  else
-    args+=(--http --http.webroot "$WEBROOT")
-  fi
-  # 关闭 glob 展开, 防止 *.example.com 意外匹配本地文件名
-  set -f
-  for d in $DOMAINS; do
-    args+=(--domains "$d")
-  done
-  set +f
-  if [ -n "${EAB_KID:-}" ]; then
-    args+=(--eab --eab.kid "$EAB_KID" --eab.hmac "$EAB_HMAC")
-  fi
-  extra=()
-  if [ "${TLS_SKIP_VERIFY:-0}" = "1" ]; then
-    # 测试 CA (pebble/自签) 模式: 跳过 TLS 校验 + 关闭 ARI
-    # (pebble 的 ARI replaces 校验与真实 CA 不同, 会 403)
-    args+=(--tls-skip-verify)
-    extra+=(--ari-disable)
-  fi
-  if [ "$DNS_PROVIDER" = "manual" ]; then
-    # manual provider (测试): 跳过 TXT 传播检查
-    args+=(--dns.propagation.wait 1s)
-  fi
+    set +f
+    if [ -n "${EAB_KID:-}" ]; then
+      args+=(--eab --eab.kid "$EAB_KID" --eab.hmac "$EAB_HMAC")
+    fi
+    extra=()
+    if [ "${TLS_SKIP_VERIFY:-0}" = "1" ]; then
+      # 测试 CA (pebble/自签) 模式: 跳过 TLS 校验 + 关闭 ARI
+      # (pebble 的 ARI replaces 校验与真实 CA 不同, 会 403)
+      args+=(--tls-skip-verify)
+      extra+=(--ari-disable)
+    fi
+    if [ "$DNS_PROVIDER" = "manual" ]; then
+      # manual provider (测试): 跳过 TXT 传播检查
+      args+=(--dns.propagation.wait 1s)
+    fi
 
-  # lego v5: 参数跟在 run 子命令之后
-  cmd=("$LEGO" run "${args[@]}" --renew-days "$RENEW_DAYS" --no-random-sleep "${extra[@]}" --deploy-hook "$RELOAD_CMD")
-  rc=0
-  if [ "$DNS_PROVIDER" = "manual" ]; then
-    yes "" | "${cmd[@]}" || rc=$?
-  else
-    "${cmd[@]}" || rc=$?
-  fi
-  if [ "$rc" -eq 0 ]; then
-    echo "[renew] $main_domain: OK"
-  else
-    echo "[renew] $main_domain: FAILED" >&2
-    fail=1
-  fi
+    # lego v5: 参数跟在 run 子命令之后
+    cmd=("$LEGO" run "${args[@]}" --renew-days "$RENEW_DAYS" --no-random-sleep ${extra[@]+"${extra[@]}"} --deploy-hook "$RELOAD_CMD")
+    rc=0
+    if [ "$DNS_PROVIDER" = "manual" ]; then
+      yes "" | "${cmd[@]}" || rc=$?
+    else
+      "${cmd[@]}" || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+      echo "[renew] $main_domain: OK"
+    else
+      echo "[renew] $main_domain: FAILED" >&2
+    fi
+    exit "$rc"
+  ) || fail=1
 done
 
 exit "$fail"

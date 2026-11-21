@@ -13,7 +13,7 @@ section(){ printf "\n\033[36m== %s ==\033[0m\n" "$1"; }
 
 # ---------------- 1. 语法检查 ----------------
 section "1. Bash 语法检查 (bash -n)"
-for f in install.sh vhost.sh include/*.sh config/lego-renew.sh.tmpl test/*.sh; do
+for f in install.sh vhost.sh include/*.sh config/lego-renew.sh.tmpl config/locklet-upgrade.sh.tmpl test/*.sh; do
   [ -f "$f" ] || continue
   if bash -n "$f" 2>/dev/null; then
     ok "bash -n $f"
@@ -24,7 +24,7 @@ done
 
 if command -v shellcheck >/dev/null 2>&1; then
   section "1b. ShellCheck 静态检查"
-  if shellcheck -S error install.sh vhost.sh include/*.sh config/lego-renew.sh.tmpl 2>/dev/null; then
+  if shellcheck -S error install.sh vhost.sh include/*.sh config/lego-renew.sh.tmpl config/locklet-upgrade.sh.tmpl 2>/dev/null; then
     ok "shellcheck (-S error) 通过"
   else
     bad "shellcheck 发现错误"
@@ -144,6 +144,68 @@ loaded_tok=$(bash -c ". '$tmpdir/dns.env'; printf '%s' \"\$CLOUDFLARE_DNS_API_TO
   && ok "dns.env 安全转义含单引号/双引号/空格的密钥" \
   || bad "dns.env 转义还原不一致: $loaded_tok"
 rm -rf "$tmpdir"
+
+# ---------------- U6 lego-renew.sh 多账号环境变量隔离 ----------------
+section "U6 lego-renew.sh 多账号 DNS 凭证隔离"
+tmpdir=$(mktemp -d)
+mkdir -p "$tmpdir/ssl/a.example.com" "$tmpdir/ssl/b.example.com"
+cat > "$tmpdir/mock-lego.sh" <<EOF
+#!/bin/bash
+printf '%s|%s|%s\n' "\${TENCENTCLOUD_SECRET_ID:-}" "\${TENCENTCLOUD_SECRET_KEY:-}" "\${TENCENTCLOUD_SESSION_TOKEN:-}" >> "$tmpdir/lego-env.log"
+EOF
+chmod +x "$tmpdir/mock-lego.sh"
+cat > "$tmpdir/ssl/a.example.com/dns.env" <<'EOF'
+export TENCENTCLOUD_SECRET_ID=acct1
+export TENCENTCLOUD_SECRET_KEY=key1
+export TENCENTCLOUD_SESSION_TOKEN=tok1
+EOF
+cat > "$tmpdir/ssl/a.example.com/renew.env" <<EOF
+DOMAINS="a.example.com *.a.example.com"
+EMAIL="a@example.com"
+SERVER="https://example.invalid/dir"
+WEBROOT=""
+DNS_PROVIDER="tencentcloud"
+DNS_CRED_FILE="$tmpdir/ssl/a.example.com/dns.env"
+EOF
+cat > "$tmpdir/ssl/b.example.com/dns.env" <<'EOF'
+export TENCENTCLOUD_SECRET_ID=acct2
+export TENCENTCLOUD_SECRET_KEY=key2
+EOF
+cat > "$tmpdir/ssl/b.example.com/renew.env" <<EOF
+DOMAINS="b.example.com *.b.example.com"
+EMAIL="b@example.com"
+SERVER="https://example.invalid/dir"
+WEBROOT=""
+DNS_PROVIDER="tencentcloud"
+DNS_CRED_FILE="$tmpdir/ssl/b.example.com/dns.env"
+EOF
+sed -e "s|__NGINX_SSL__|$tmpdir/ssl|g" \
+    -e "s|LEGO=/usr/local/bin/lego|LEGO=$tmpdir/mock-lego.sh|g" \
+    "$LOCKLET_ROOT/config/lego-renew.sh.tmpl" > "$tmpdir/lego-renew.sh"
+bash "$tmpdir/lego-renew.sh" >/dev/null 2>&1 \
+  && ok "lego-renew.sh 多账号 mock 执行成功" || bad "lego-renew.sh 执行失败"
+line1=$(sed -n '1p' "$tmpdir/lego-env.log")
+line2=$(sed -n '2p' "$tmpdir/lego-env.log")
+[ "$line1" = "acct1|key1|tok1" ] && ok "账号 1 凭证正确加载 ($line1)" || bad "账号 1 凭证异常: $line1"
+[ "$line2" = "acct2|key2|" ] && ok "账号 2 凭证隔离正常, 无残留 SESSION_TOKEN ($line2)" || bad "账号 2 存在环境变量泄漏: $line2"
+rm -rf "$tmpdir"
+
+# ---------------- U7 ZeroSSL EAB JSON 解析 ----------------
+section "U7 ZeroSSL EAB JSON 解析"
+bash -c '
+  . ./include/common.sh
+  . ./include/vhost_acme.sh
+  EAB_KID="" EAB_HMAC=""
+  _parse_zerossl_eab_json "{\"success\":true,\"eab_kid\":\"kid123\",\"eab_hmac_key\":\"hmac456\"}"
+  [ "$EAB_KID" = "kid123" ] && [ "$EAB_HMAC" = "hmac456" ]
+' && ok "_parse_zerossl_eab_json 支持 eab-credentials-email 返回格式" || bad "eab-credentials-email JSON 解析失败"
+bash -c '
+  . ./include/common.sh
+  . ./include/vhost_acme.sh
+  EAB_KID="" EAB_HMAC=""
+  _parse_zerossl_eab_json "{\"EABKID\":\"k2\",\"EABHMACKey\":\"h2\"}"
+  [ "$EAB_KID" = "k2" ] && [ "$EAB_HMAC" = "h2" ]
+' && ok "_parse_zerossl_eab_json 兼容 EABKID/EABHMACKey 格式" || bad "EABKID JSON 解析失败"
 
 # ---------------- 汇总 ----------------
 echo

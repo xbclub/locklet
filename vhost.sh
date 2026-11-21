@@ -217,7 +217,7 @@ do_wildcard() { # ./vhost.sh wildcard -d example.com --dns cloudflare ...
   DOMAINS_ARR=("$MAIN" "*.$MAIN")
   SERVER_NAMES="$MAIN *.$MAIN"
 
-  SSL_MODE="${opt_ssl:-le}"
+  SSL_MODE="${opt_ssl:-zerossl}"
   case "$SSL_MODE" in
     le|le-staging|zerossl) ;;
     *) log_fatal "通配符证书 CA 仅支持: le | le-staging | zerossl" ;;
@@ -230,11 +230,13 @@ do_wildcard() { # ./vhost.sh wildcard -d example.com --dns cloudflare ...
   mkdir -p "$SSL_DIR"
   dns_provider_collect "$SSL_DIR"
   DNS_CRED_FILE="$SSL_DIR/dns.env"
-  # shellcheck disable=SC1090
-  [ -f "$DNS_CRED_FILE" ] && . "$DNS_CRED_FILE"
-
   DNS_RESOLVERS_STR="${DNS_RESOLVERS_ARR[*]:-}"
-  if ! run_lego_dns_issue; then
+  # 在子 shell 中加载 DNS 凭证, 避免污染主进程 (如菜单连续申请不同账号通配符证书)
+  if ! (
+    # shellcheck disable=SC1090
+    [ -f "$DNS_CRED_FILE" ] && . "$DNS_CRED_FILE"
+    run_lego_dns_issue
+  ); then
     log_error "通配符证书签发失败 (CA: $CA_SERVER, DNS: $DNS_PROVIDER)"
     log_info  "常见原因: DNS 凭证错误 / TXT 记录未生效 / provider 名称不对 (lego dnshelp 查询)"
     return 1
@@ -338,18 +340,18 @@ ask_common_questions() {
   while [ -z "$SSL_MODE" ]; do
     printf "\033[33m%s\033[0m\n" "SSL 证书:"
     cat <<EOF
-  1. Let's Encrypt (正式)
-  2. Let's Encrypt (staging 测试)
-  3. ZeroSSL (ACME, 需要 API key 或 EAB)
+  1. ZeroSSL (ACME, 需要 API key 或 EAB)
+  2. Let's Encrypt (正式)
+  3. Let's Encrypt (staging 测试)
   4. 自有证书 (自定义 crt/key 路径)
   5. 暂不启用 SSL
   6. 复用已有通配符证书 (*.域名)
 EOF
     read -r -p "选择 [默认 1]: " s
     case "${s:-1}" in
-      1) SSL_MODE=le ;;
-      2) SSL_MODE=le-staging ;;
-      3) SSL_MODE=zerossl ;;
+      1) SSL_MODE=zerossl ;;
+      2) SSL_MODE=le ;;
+      3) SSL_MODE=le-staging ;;
       4) SSL_MODE=custom ;;
       5) SSL_MODE=none ;;
       6) SSL_MODE=wildcard ;;
@@ -446,19 +448,19 @@ do_ssl() {
   SSL_MODE="${opt_ssl:-}"
   if [ -z "$SSL_MODE" ]; then
     if [ "$ASSUME_YES" -eq 1 ]; then
-      SSL_MODE="le"
+      SSL_MODE="zerossl"
     else
       printf "\033[33m%s\033[0m\n" "选择证书方式:"
       cat <<EOF
-  1. Let's Encrypt (正式)
-  2. Let's Encrypt (staging 测试)
-  3. ZeroSSL (ACME)
+  1. ZeroSSL (ACME, 需要 API key 或 EAB)
+  2. Let's Encrypt (正式)
+  3. Let's Encrypt (staging 测试)
   4. 自有证书
   5. 复用已有通配符证书
 EOF
       read -r -p "选择 [默认 1]: " s
       case "${s:-1}" in
-        1) SSL_MODE=le ;; 2) SSL_MODE=le-staging ;; 3) SSL_MODE=zerossl ;; 4) SSL_MODE=custom ;; 5) SSL_MODE=wildcard ;;
+        1) SSL_MODE=zerossl ;; 2) SSL_MODE=le ;; 3) SSL_MODE=le-staging ;; 4) SSL_MODE=custom ;; 5) SSL_MODE=wildcard ;;
       esac
     fi
   fi

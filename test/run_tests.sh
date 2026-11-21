@@ -167,7 +167,7 @@ else
 fi
 
 # 申请通配符: *.test4.local (manual provider + pebble)
-./vhost.sh wildcard -d test4.local --dns manual \
+./vhost.sh wildcard -d test4.local --ssl le --dns manual \
   --ca-url https://localhost:14000/dir --tls-skip-verify --dns-resolvers 127.0.0.1:5353 \
   --email admin@test.local --yes >/tmp/t7.log 2>&1
 WCRT=/usr/local/nginx/conf/ssl/test4.local/certificates/test4.local.crt
@@ -231,13 +231,21 @@ else
   bad "deb 安装失败 (rc=$rc)"; tail -20 /tmp/t8-install.log
 fi
 dpkg -s nginx >/dev/null 2>&1 && ok "dpkg 包已安装: $(dpkg-query -W -f='${Version}' nginx)" || bad "dpkg 未安装 nginx"
-/usr/sbin/nginx -v 2>&1 | grep -q "1.30.7" && ok "官方 stable 版本 1.30.7" || bad "版本异常: $(/usr/sbin/nginx -v 2>&1)"
+deb_ver=$(/usr/sbin/nginx -v 2>&1 | sed -n 's|.*nginx/\([0-9]*\.[0-9]*\.[0-9]*\).*|\1|p')
+deb_minor=$(echo "$deb_ver" | cut -d. -f2)
+if [ -n "$deb_ver" ] && [ $((deb_minor % 2)) -eq 0 ]; then
+  ok "官方 stable 版本 $deb_ver (次版本号为偶数)"
+else
+  bad "版本异常: $(/usr/sbin/nginx -v 2>&1)"
+fi
 systemctl is-active nginx >/dev/null 2>&1 && ok "nginx (deb) 服务 active" || bad "nginx 服务未运行"
 curl -fsS http://127.0.0.1/ >/dev/null && ok "默认站点可访问" || bad "默认站点不可访问"
 grep -q "^install_mode=deb" /root/locklet/options.conf && ok "options.conf 回写 install_mode=deb" || bad "options.conf 未回写"
 [ -f /etc/nginx/conf.d/test3.local.conf ] && ok "vhost 已迁移到 /etc/nginx/conf.d" || bad "vhost 未迁移"
 [ -f /etc/nginx/ssl/test3.local/certificates/test3.local.crt ] && ok "证书已迁移到 /etc/nginx/ssl" || bad "证书未迁移"
 grep -q "/etc/nginx/ssl/test3.local" /etc/nginx/conf.d/test3.local.conf && ok "conf 内证书路径已改写" || bad "conf 内路径未改写"
+grep -q 'DNS_CRED_FILE="/etc/nginx/ssl/test4.local/dns.env"' /etc/nginx/ssl/test4.local/renew.env \
+  && ok "renew.env 内 DNS_CRED_FILE 路径已改写" || bad "renew.env 内 DNS_CRED_FILE 未改写"
 ls -d /usr/local/nginx.bak-* >/dev/null 2>&1 && [ ! -e /usr/local/nginx ] && ok "旧目录已备份为 .bak-*" || bad "旧目录处理异常"
 /usr/sbin/nginx -t >/dev/null 2>&1 && ok "nginx -t 通过 (迁移后)" || bad "nginx -t 失败"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --resolve test3.local:443:127.0.0.1 https://test3.local/)
@@ -264,6 +272,8 @@ dpkg -s nginx >/dev/null 2>&1 && bad "deb 包未卸载" || ok "deb 包已卸载"
 systemctl is-active nginx >/dev/null 2>&1 && ok "nginx (source) 服务 active" || bad "nginx 服务未运行"
 [ -f /usr/local/nginx/conf/vhost/test3.local.conf ] && ok "vhost 已恢复到 conf/vhost" || bad "vhost 未恢复"
 [ -f /usr/local/nginx/conf/ssl/test3.local/certificates/test3.local.crt ] && ok "证书已恢复" || bad "证书未恢复"
+grep -q 'DNS_CRED_FILE="/usr/local/nginx/conf/ssl/test4.local/dns.env"' /usr/local/nginx/conf/ssl/test4.local/renew.env \
+  && ok "renew.env 内 DNS_CRED_FILE 已改写回 source 路径" || bad "renew.env 内 DNS_CRED_FILE 未改写回 source 路径"
 code=$(curl -sk -o /dev/null -w '%{http_code}' --resolve test3.local:443:127.0.0.1 https://test3.local/)
 [ "$code" = "200" ] && ok "恢复后 https test3.local -> 200" || bad "恢复后 https -> $code"
 /usr/local/nginx/sbin/nginx -t >/dev/null 2>&1 && ok "nginx -t 通过 (恢复后)" || bad "nginx -t 失败"

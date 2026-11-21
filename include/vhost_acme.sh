@@ -14,17 +14,29 @@ dns_check() { # $1 domain; 0=解析到本机
   return 1
 }
 
-fetch_zerossl_eab() { # $1 access_key -> 设置 EAB_KID / EAB_HMAC
-  local resp
-  resp=$(curl -sS --max-time 30 "https://api.zerossl.com/acme/eab?access_key=$1") || return 1
+_parse_zerossl_eab_json() { # $1 json -> 设置 EAB_KID / EAB_HMAC
+  local resp="$1"
   if command -v jq >/dev/null 2>&1; then
     EAB_KID=$(printf '%s' "$resp" | jq -r '.eab_kid // .EABKID // empty' 2>/dev/null)
     EAB_HMAC=$(printf '%s' "$resp" | jq -r '.eab_hmac_key // .EABHMACKey // empty' 2>/dev/null)
   else
-    EAB_KID=$(printf '%s' "$resp" | sed -n 's/.*"EABKID"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-    EAB_HMAC=$(printf '%s' "$resp" | sed -n 's/.*"EABHMACKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    EAB_KID=$(printf '%s' "$resp" | sed -nE 's/.*"(eab_kid|EABKID)"[[:space:]]*:[[:space:]]*"([^"]*)".*/\2/p' | head -1)
+    EAB_HMAC=$(printf '%s' "$resp" | sed -nE 's/.*"(eab_hmac_key|EABHMACKey)"[[:space:]]*:[[:space:]]*"([^"]*)".*/\2/p' | head -1)
   fi
   [ -n "$EAB_KID" ] && [ -n "$EAB_HMAC" ]
+}
+
+fetch_zerossl_eab() { # $1 access_key -> 设置 EAB_KID / EAB_HMAC
+  local resp
+  resp=$(curl -sS --max-time 30 "https://api.zerossl.com/acme/eab?access_key=$1") || return 1
+  _parse_zerossl_eab_json "$resp"
+}
+
+fetch_zerossl_eab_by_email() { # $1 email -> 免 API key 自动换取 ZeroSSL EAB
+  local resp
+  resp=$(curl -sS --max-time 30 -X POST "https://api.zerossl.com/acme/eab-credentials-email" \
+    --data-urlencode "email=$1") || return 1
+  _parse_zerossl_eab_json "$resp"
 }
 
 # 统一解析 Email / CA 目录 / ZeroSSL EAB (供 HTTP-01 与 DNS-01 共用)
@@ -49,8 +61,15 @@ resolve_acme_account() {
         log_info "通过 ZeroSSL API 获取 EAB 凭证..."
         fetch_zerossl_eab "$opt_zerossl_key" || log_fatal "获取 EAB 失败, 请检查 API key"
         step_ok "EAB 获取成功 (kid: ${EAB_KID:0:8}...)"
+      elif [ -z "$EAB_KID" ] && [ -z "${opt_ca_url:-}" ]; then
+        log_info "自动通过邮箱 ($EMAIL) 获取 ZeroSSL EAB 凭证..."
+        if fetch_zerossl_eab_by_email "$EMAIL"; then
+          step_ok "EAB 自动获取成功 (kid: ${EAB_KID:0:8}...)"
+        else
+          log_warn "邮箱自动获取 ZeroSSL EAB 失败, 请手动提供 API key 或 EAB"
+        fi
       fi
-      if [ -z "$EAB_KID" ] && [ "$ASSUME_YES" -eq 0 ]; then
+      if [ -z "$EAB_KID" ] && [ "$ASSUME_YES" -eq 0 ] && [ -z "${opt_ca_url:-}" ]; then
         while [ -z "$EAB_KID" ]; do
           printf "\033[33m%s\033[0m\n" "ZeroSSL 需要 EAB (External Account Binding):"
           echo "  1. 输入 ZeroSSL API access key 自动获取"
@@ -68,8 +87,8 @@ resolve_acme_account() {
           esac
         done
       fi
-      if [ -z "$EAB_KID" ] || [ -z "$EAB_HMAC" ]; then
-        log_fatal "ZeroSSL 需要 EAB: --zerossl-key <key> 或 --eab-kid/--eab-hmac"
+      if { [ -z "$EAB_KID" ] || [ -z "$EAB_HMAC" ]; } && [ -z "${opt_ca_url:-}" ]; then
+        log_fatal "ZeroSSL 需要 EAB: 请检查邮箱自动获取网络, 或传入 --zerossl-key / --eab-kid --eab-hmac"
       fi
       ;;
     *) log_fatal "不支持的 ACME CA 模式: $SSL_MODE" ;;

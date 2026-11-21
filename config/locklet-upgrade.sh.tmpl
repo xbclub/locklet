@@ -1,7 +1,7 @@
 #!/bin/bash
 # locklet nginx 自动升级 (由 locklet-upgrade.timer 每周日 04:30 调用)
 #   deb 模式   : apt 跟随 nginx.org 官方仓库升级
-#   source 模式: 检测官方新版本并自动重编 (保留现有配置, --skip-conf)
+#   source 模式: 检测官方新版本并自动重编 (保留现有配置, --skip-conf --skip-lego)
 set -u
 
 CONF=__LOCKLET_CONF__
@@ -14,11 +14,23 @@ log() { echo "[upgrade $(date '+%F %T')] $*"; }
 if [ "${install_mode:-deb}" = "deb" ]; then
   before=$("$nginx_sbin" -v 2>&1)
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq >/dev/null 2>&1
-  apt-get install -y --only-upgrade nginx >/dev/null 2>&1
+  if ! apt-get update -qq >/tmp/locklet_upgrade_apt.log 2>&1; then
+    log "apt-get update 失败 (见 /tmp/locklet_upgrade_apt.log)"
+    exit 1
+  fi
+  if ! apt-get install -y --only-upgrade \
+       -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+       nginx >>/tmp/locklet_upgrade_apt.log 2>&1; then
+    log "apt-get upgrade nginx 失败 (见 /tmp/locklet_upgrade_apt.log)"
+    exit 1
+  fi
   after=$("$nginx_sbin" -v 2>&1)
   if [ "$before" != "$after" ]; then
-    log "deb 升级: $before -> $after, 重启 nginx"
+    log "deb 升级: $before -> $after, 校验并重启 nginx"
+    if ! "$nginx_sbin" -t >/tmp/locklet_upgrade_test.log 2>&1; then
+      log "nginx -t 校验失败, 暂不重启 (见 /tmp/locklet_upgrade_test.log)"
+      exit 1
+    fi
     systemctl restart nginx
   else
     log "deb 已是最新 ($after)"
@@ -28,9 +40,10 @@ fi
 
 # ---- source 模式 ----
 page=$(curl -fsSL --max-time 30 https://nginx.org/en/download.html) || { log "获取版本信息失败"; exit 1; }
-# 页面顺序: Mainline 在前, Stable 在后; 同一版本会重复出现, 先去重
-latest_mainline=$(echo "$page" | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' | awk '!seen[$0]++' | sed -n '1p')
-latest_stable=$(echo "$page"  | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' | awk '!seen[$0]++' | sed -n '2p')
+# 按 nginx 约定: 次版本号奇数为 mainline (如 1.31.x), 偶数为 stable (如 1.30.x)
+all_vers=$(printf '%s\n' "$page" | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' | sort -Vu)
+latest_mainline=$(printf '%s\n' "$all_vers" | awk -F. '$2 % 2 == 1' | tail -1)
+latest_stable=$(printf '%s\n' "$all_vers"   | awk -F. '$2 % 2 == 0' | tail -1)
 want=$([ "${nginx_channel:-stable}" = "mainline" ] && echo "$latest_mainline" || echo "$latest_stable")
 [ -n "$want" ] || { log "未能解析最新版本号"; exit 1; }
 
@@ -47,4 +60,4 @@ fi
 
 log "source 发现新版本: $cur -> $want, 开始自动重编 (保留配置)..."
 cd "${locklet_dir:?locklet_dir 未配置}" || exit 1
-./install.sh --auto --source --nginx-version "$want" --skip-conf
+./install.sh --auto --source --nginx-version "$want" --skip-conf --skip-lego

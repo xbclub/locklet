@@ -8,8 +8,8 @@ DEB_PIN=/etc/apt/preferences.d/99-locklet-nginx
 install_depend_deb() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y >/dev/null 2>&1 || apt-get update -y
-  apt-get install -y curl ca-certificates >/dev/null 2>&1 \
-    || apt-get install -y curl ca-certificates
+  apt-get install -y curl ca-certificates openssl jq >/dev/null 2>&1 \
+    || apt-get install -y curl ca-certificates openssl jq
   step_ok "deb 模式依赖安装完成"
 }
 
@@ -34,14 +34,18 @@ migrate_from_source() {
 
 # apt 安装后: 恢复迁移数据 + 布局适配
 install_nginx_deb() {
-  local codename
+  local codename os_dist
   # shellcheck disable=SC1091
   . /etc/os-release
   codename="${VERSION_CODENAME:-}"
   [ -n "$codename" ] || log_fatal "无法识别发行版代号 (VERSION_CODENAME)"
+  case "${ID:-debian}" in
+    ubuntu) os_dist="ubuntu" ;;
+    *)      os_dist="debian" ;;
+  esac
 
-  local repo_url="https://nginx.org/packages/debian"
-  [ "$nginx_channel" = "mainline" ] && repo_url="https://nginx.org/packages/mainline/debian"
+  local repo_url="https://nginx.org/packages/${os_dist}"
+  [ "$nginx_channel" = "mainline" ] && repo_url="https://nginx.org/packages/mainline/${os_dist}"
 
   # 1) 官方签名 key + 源 + pin (优先官方源, 避免被发行版旧包顶掉)
   mkdir -p /etc/apt/keyrings
@@ -84,15 +88,18 @@ EOF
     old=$(ls -d "${DEB_MIGRATE_OLD_PREFIX}".bak-* 2>/dev/null | tail -1)
     if [ -n "$old" ]; then
       if [ -d "$old/conf/vhost" ]; then
-        find "$old/conf/vhost" -maxdepth 1 -name '*.conf' -exec cp -a {} /etc/nginx/conf.d/ \;
+        find "$old/conf/vhost" -maxdepth 1 -name '*.conf' -not -name '0.default.conf' -not -name 'default.conf' \
+          -exec cp -a {} /etc/nginx/conf.d/ \;
       fi
       [ -d "$old/conf/ssl" ] && cp -a "$old/conf/ssl/." /etc/nginx/ssl/ 2>/dev/null
       [ -d "$old/conf/rewrite" ] && cp -a "$old/conf/rewrite/." /etc/nginx/rewrite/ 2>/dev/null
       rm -f /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/*.dpkg-* 2>/dev/null
-      # conf 内的绝对路径改写: 用"原路径"(conf 内容里仍是原始 prefix, 不是 .bak 名)
+      # conf 与 renew.env 内的绝对路径改写: 用"原路径"(内容里仍是原始 prefix, 不是 .bak 名)
       sed -i -e "s|${DEB_MIGRATE_OLD_PREFIX}/conf/ssl|/etc/nginx/ssl|g" \
              -e "s|${DEB_MIGRATE_OLD_PREFIX}/conf/rewrite|/etc/nginx/rewrite|g" \
              /etc/nginx/conf.d/*.conf 2>/dev/null
+      find /etc/nginx/ssl -maxdepth 2 -name 'renew.env' -exec \
+        sed -i "s|${DEB_MIGRATE_OLD_PREFIX}/conf/ssl|/etc/nginx/ssl|g" {} + 2>/dev/null
       step_ok "vhost/证书/伪静态 已迁移到 /etc/nginx"
     fi
   fi
@@ -143,9 +150,11 @@ restore_from_deb_backup() {
   [ -d "$SRC_MIGRATE_BACKUP/ssl" ] && cp -a "$SRC_MIGRATE_BACKUP/ssl/." "$nginx_ssl_dir/" 2>/dev/null
   [ -d "$SRC_MIGRATE_BACKUP/rewrite" ] && cp -a "$SRC_MIGRATE_BACKUP/rewrite/." "$nginx_rewrite_dir/" 2>/dev/null
   rm -f "$dir"/*.dpkg-* 2>/dev/null
-  # 绝对路径改写回 oneinstack 布局
+  # 绝对路径改写回 oneinstack 布局 (conf 与 renew.env)
   sed -i -e "s|/etc/nginx/ssl|${nginx_ssl_dir}|g" \
          -e "s|/etc/nginx/rewrite|${nginx_rewrite_dir}|g" \
          "$dir"/*.conf 2>/dev/null
+  find "$nginx_ssl_dir" -maxdepth 2 -name 'renew.env' -exec \
+    sed -i "s|/etc/nginx/ssl|${nginx_ssl_dir}|g" {} + 2>/dev/null
   step_ok "deb 版数据已恢复到 ${nginx_conf}"
 }

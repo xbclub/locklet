@@ -30,21 +30,7 @@ install_lego() {
 
   cp -f "$LOCKLET_ROOT/config/lego-renew.service.tmpl" /etc/systemd/system/lego-renew.service
   cp -f "$LOCKLET_ROOT/config/lego-renew.timer.tmpl"   /etc/systemd/system/lego-renew.timer
-
-  # nginx 自动升级 (deb: apt / source: 重编)
-  sed -e "s|__LOCKLET_CONF__|${LOCKLET_ROOT}/options.conf|g" \
-      "$LOCKLET_ROOT/config/locklet-upgrade.sh.tmpl" > /usr/local/bin/locklet-upgrade.sh
-  chmod 0755 /usr/local/bin/locklet-upgrade.sh
-  cp -f "$LOCKLET_ROOT/config/locklet-upgrade.service.tmpl" /etc/systemd/system/locklet-upgrade.service
-  cp -f "$LOCKLET_ROOT/config/locklet-upgrade.timer.tmpl"   /etc/systemd/system/locklet-upgrade.timer
-
   systemctl daemon-reload
   systemctl enable lego-renew.timer >/dev/null 2>&1
-  if [ "${auto_upgrade:-y}" = "y" ]; then
-    systemctl enable locklet-upgrade.timer >/dev/null 2>&1
-    step_ok "定时任务: lego-renew.timer (每天 03:30) + locklet-upgrade.timer (每周日 04:30)"
-  else
-    systemctl disable locklet-upgrade.timer >/dev/null 2>&1
-    step_ok "定时任务: lego-renew.timer (每天 03:30); 自动升级已关闭"
-  fi
+  step_ok "续期任务已部署: /usr/local/bin/lego-renew.sh + lego-renew.timer (每天 03:30)"
 }
