@@ -1,0 +1,8 @@
+[Unit]
+Description=locklet - nginx auto upgrade (deb: apt / source: rebuild)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/locklet-upgrade.sh

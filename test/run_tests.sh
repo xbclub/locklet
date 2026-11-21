@@ -141,8 +141,9 @@ section "T6 vhost 删除"
 ./vhost.sh del -d test1.local --purge-webroot --purge-ssl --yes >/dev/null 2>&1
 [ ! -f /usr/local/nginx/conf/vhost/test1.local.conf ] && ok "vhost conf 已删除" || bad "vhost conf 残留"
 [ ! -d /data/wwwroot/test1 ] && ok "webroot 已删除" || bad "webroot 残留"
-sleep 2  # 等待 reload 生效
+sleep 3  # 等待 reload 生效 (重试一次防竞态)
 body=$(curl -s -H 'Host: test1.local' http://127.0.0.1/)
+echo "$body" | grep -q "locklet" || { sleep 2; body=$(curl -s -H 'Host: test1.local' http://127.0.0.1/); }
 echo "$body" | grep -q "locklet" && ok "删除后回落到默认站点 (locklet 默认页)" || bad "删除后未回落默认站点: $(echo "$body" | head -1)"
 /usr/local/nginx/sbin/nginx -t >/dev/null 2>&1 && ok "nginx -t 通过" || bad "nginx -t 失败"
 
@@ -219,6 +220,56 @@ fi
 ./vhost.sh del -d abc.test4.local --purge-webroot --purge-ssl --yes >/tmp/t7d.log 2>&1
 [ ! -f "$VCONF" ] && ok "vhost abc.test4.local 已删除" || bad "vhost 残留"
 [ -f "$WCRT" ] && ok "共享通配符证书已保留 (未被误删)" || bad "通配符证书被误删!"
+
+# ---------------- T8 官方 deb 模式 (源码版迁移) ----------------
+section "T8 官方 deb 模式 (source -> deb 迁移)"
+/root/locklet/install.sh --auto >/tmp/t8-install.log 2>&1
+rc=$?
+if [ $rc -eq 0 ] && dpkg -s nginx >/dev/null 2>&1; then
+  ok "install.sh --auto (默认 deb) 安装成功"
+else
+  bad "deb 安装失败 (rc=$rc)"; tail -20 /tmp/t8-install.log
+fi
+dpkg -s nginx >/dev/null 2>&1 && ok "dpkg 包已安装: $(dpkg-query -W -f='${Version}' nginx)" || bad "dpkg 未安装 nginx"
+/usr/sbin/nginx -v 2>&1 | grep -q "1.30.7" && ok "官方 stable 版本 1.30.7" || bad "版本异常: $(/usr/sbin/nginx -v 2>&1)"
+systemctl is-active nginx >/dev/null 2>&1 && ok "nginx (deb) 服务 active" || bad "nginx 服务未运行"
+curl -fsS http://127.0.0.1/ >/dev/null && ok "默认站点可访问" || bad "默认站点不可访问"
+grep -q "^install_mode=deb" /root/locklet/options.conf && ok "options.conf 回写 install_mode=deb" || bad "options.conf 未回写"
+[ -f /etc/nginx/conf.d/test3.local.conf ] && ok "vhost 已迁移到 /etc/nginx/conf.d" || bad "vhost 未迁移"
+[ -f /etc/nginx/ssl/test3.local/certificates/test3.local.crt ] && ok "证书已迁移到 /etc/nginx/ssl" || bad "证书未迁移"
+grep -q "/etc/nginx/ssl/test3.local" /etc/nginx/conf.d/test3.local.conf && ok "conf 内证书路径已改写" || bad "conf 内路径未改写"
+ls -d /usr/local/nginx.bak-* >/dev/null 2>&1 && [ ! -e /usr/local/nginx ] && ok "旧目录已备份为 .bak-*" || bad "旧目录处理异常"
+/usr/sbin/nginx -t >/dev/null 2>&1 && ok "nginx -t 通过 (迁移后)" || bad "nginx -t 失败"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --resolve test3.local:443:127.0.0.1 https://test3.local/)
+[ "$code" = "200" ] && ok "迁移后 https test3.local -> 200" || bad "迁移后 https -> $code"
+cd /root/locklet && ./vhost.sh list | grep -q "test3.local" && ok "vhost list (deb 模式) 正常" || bad "vhost list 异常"
+./vhost.sh add -d test5.local --ssl none --yes >/dev/null 2>&1
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: test5.local' http://127.0.0.1/)
+[ "$code" = "200" ] && ok "deb 模式新增 vhost -> 200" || bad "deb 模式新增 vhost -> $code"
+
+# ---------------- T9 自动升级 ----------------
+section "T9 自动升级 timer (deb)"
+systemctl is-enabled locklet-upgrade.timer >/dev/null 2>&1 && ok "locklet-upgrade.timer 已启用" || bad "upgrade timer 未启用"
+/usr/local/bin/locklet-upgrade.sh >/tmp/t9.log 2>&1 && ok "升级脚本执行成功" || { bad "升级脚本失败"; tail -10 /tmp/t9.log; }
+grep -q "deb 已是最新" /tmp/t9.log && ok "deb 通道已是最新 (正确判定)" || bad "升级判定异常: $(tail -1 /tmp/t9.log)"
+systemctl is-active nginx >/dev/null 2>&1 && ok "升级检查后 nginx 仍 active" || bad "nginx 异常"
+
+# ---------------- T10 切回源码模式 (deb -> source 迁移) ----------------
+section "T10 切回源码模式 (deb -> source 迁移)"
+/root/locklet/install.sh --auto --source >/tmp/t10-install.log 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then ok "install.sh --auto --source 安装成功"; else bad "source 安装失败 (rc=$rc)"; tail -20 /tmp/t10-install.log; fi
+/usr/local/nginx/sbin/nginx -v 2>&1 | grep -q "1.31.9" && ok "源码编译 1.31.9" || bad "版本异常: $(/usr/local/nginx/sbin/nginx -v 2>&1)"
+dpkg -s nginx >/dev/null 2>&1 && bad "deb 包未卸载" || ok "deb 包已卸载"
+systemctl is-active nginx >/dev/null 2>&1 && ok "nginx (source) 服务 active" || bad "nginx 服务未运行"
+[ -f /usr/local/nginx/conf/vhost/test3.local.conf ] && ok "vhost 已恢复到 conf/vhost" || bad "vhost 未恢复"
+[ -f /usr/local/nginx/conf/ssl/test3.local/certificates/test3.local.crt ] && ok "证书已恢复" || bad "证书未恢复"
+code=$(curl -sk -o /dev/null -w '%{http_code}' --resolve test3.local:443:127.0.0.1 https://test3.local/)
+[ "$code" = "200" ] && ok "恢复后 https test3.local -> 200" || bad "恢复后 https -> $code"
+/usr/local/nginx/sbin/nginx -t >/dev/null 2>&1 && ok "nginx -t 通过 (恢复后)" || bad "nginx -t 失败"
+./vhost.sh list | grep -q "test3.local" && ok "vhost list (source 模式) 正常" || bad "vhost list 异常"
+/usr/local/bin/locklet-upgrade.sh >/tmp/t10b.log 2>&1 && ok "source 模式升级脚本执行成功" || { bad "升级脚本失败"; tail -10 /tmp/t10b.log; }
+grep -qE "已是最新|不低于仓库版本" /tmp/t10b.log && ok "source 通道升级判定正确 (1.31.9 vs stable 1.30.7)" || bad "判定异常: $(tail -1 /tmp/t10b.log)"
 
 # ---------------- 汇总 ----------------
 echo

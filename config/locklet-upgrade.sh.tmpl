@@ -1,0 +1,50 @@
+#!/bin/bash
+# locklet nginx 自动升级 (由 locklet-upgrade.timer 每周日 04:30 调用)
+#   deb 模式   : apt 跟随 nginx.org 官方仓库升级
+#   source 模式: 检测官方新版本并自动重编 (保留现有配置, --skip-conf)
+set -u
+
+CONF=__LOCKLET_CONF__
+# shellcheck disable=SC1090
+. "$CONF"
+log() { echo "[upgrade $(date '+%F %T')] $*"; }
+
+[ -x "${nginx_sbin:-/usr/sbin/nginx}" ] || { log "nginx 未安装, 退出"; exit 0; }
+
+if [ "${install_mode:-deb}" = "deb" ]; then
+  before=$("$nginx_sbin" -v 2>&1)
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq >/dev/null 2>&1
+  apt-get install -y --only-upgrade nginx >/dev/null 2>&1
+  after=$("$nginx_sbin" -v 2>&1)
+  if [ "$before" != "$after" ]; then
+    log "deb 升级: $before -> $after, 重启 nginx"
+    systemctl restart nginx
+  else
+    log "deb 已是最新 ($after)"
+  fi
+  exit 0
+fi
+
+# ---- source 模式 ----
+page=$(curl -fsSL --max-time 30 https://nginx.org/en/download.html) || { log "获取版本信息失败"; exit 1; }
+# 页面顺序: Mainline 在前, Stable 在后; 同一版本会重复出现, 先去重
+latest_mainline=$(echo "$page" | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' | awk '!seen[$0]++' | sed -n '1p')
+latest_stable=$(echo "$page"  | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' | awk '!seen[$0]++' | sed -n '2p')
+want=$([ "${nginx_channel:-stable}" = "mainline" ] && echo "$latest_mainline" || echo "$latest_stable")
+[ -n "$want" ] || { log "未能解析最新版本号"; exit 1; }
+
+cur=$("$nginx_sbin" -v 2>&1 | sed -n 's|.*nginx/\([0-9.]*\).*|\1|p')
+newer=$(printf '%s\n%s\n' "$cur" "$want" | sort -V | tail -1)
+if [ "$want" = "$cur" ]; then
+  log "source 已是最新 ($cur)"
+  exit 0
+fi
+if [ "$newer" != "$want" ]; then
+  log "当前版本 ($cur) 不低于仓库版本 ($want), 跳过"
+  exit 0
+fi
+
+log "source 发现新版本: $cur -> $want, 开始自动重编 (保留配置)..."
+cd "${locklet_dir:?locklet_dir 未配置}" || exit 1
+./install.sh --auto --source --nginx-version "$want" --skip-conf

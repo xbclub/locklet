@@ -4,7 +4,14 @@ nginx + lego 一键安装 / vhost 管理 / SSL 证书工具集, 采用 [oneinsta
 
 ## 特性
 
-- **nginx 源码编译安装** (默认 1.31.9), 编译参数可配置
+- **双安装模式**
+  - **deb (默认)**: nginx.org 官方 deb 包 (stable 通道), 自动配置 apt 源/key/pin,
+    跟随官方仓库升级; `--channel mainline` 可切 mainline
+  - **source (显式)**: 源码编译 (最小化参数 + 加固 + 可选模块), `--source` 或
+    `--nginx-version` 触发; 两种模式可随时互切, vhost/证书/伪静态自动迁移
+- **自动升级**: `locklet-upgrade.timer` 每周日 04:30 — deb 模式走 apt;
+  source 模式自动检测官方新版本并重编 (保留现有配置)
+- **源码模式编译参数可配置**
   - 核心参数即"最小化编译参数"(见下), 保证与目标环境一致
   - 可选附加模块: `stub_status` `http_v3`(QUIC) `sub_module` `headers_more` `brotli`
   - pcre2 / zlib / openssl 均为源码内置编译(oneinstack 同款做法), 不污染系统库
@@ -59,14 +66,22 @@ FORTIFY_SOURCE / PIC / full RELRO / PIE。可在 `options.conf` 的 `nginx_cc_op
 ## 安装
 
 ```bash
-./install.sh          # 交互安装 (oneinstack 风格菜单)
-./install.sh --auto   # 无人值守 (options.conf 默认值)
+./install.sh              # 交互安装 (默认官方 stable deb 包)
+./install.sh --auto       # 无人值守, 默认 = 官方 stable deb 包 + 自动升级
 
-# 常用参数
-./install.sh --nginx-version 1.31.9 \
+# 源码编译 (显式指定)
+./install.sh --auto --source --nginx-version 1.31.9 \
              --nginx-module "stub_status,http_v3" \
              --mirror https://mirror.ghproxy.com/   # github 加速
+
+# deb 模式切 mainline 通道 / 关闭自动升级
+./install.sh --auto --channel mainline
+./install.sh --auto --no-auto-upgrade
 ```
+
+模式互切: 直接再跑一次 install.sh 即可 (`./install.sh --auto` ↔ `--source`),
+vhost / 证书 / 伪静态 / dns.env 自动迁移, conf 内绝对路径自动改写。
+升级: `systemctl list-timers | grep upgrade` 或手动 `/usr/local/bin/locklet-upgrade.sh`。
 
 ## vhost 管理
 

@@ -1,32 +1,8 @@
 #!/bin/bash
-# nginx 编译安装 (oneinstack 风格: www 用户 / /usr/local/nginx / /data/wwwroot / /data/wwwlogs)
+# nginx 源码编译安装 (oneinstack 风格: www 用户 / /usr/local/nginx / /data/wwwroot / /data/wwwlogs)
+# create_www_user / prepare_dirs 已移至 common.sh (deb/source 两模式共用)
 
 NGINX_ARGS_FILE="/tmp/locklet_nginx_configure.args"
-
-# 创建 www 运行账户
-create_www_user() {
-  if id -g "$www_group" >/dev/null 2>&1; then
-    log_info "用户组 $www_group 已存在"
-  else
-    groupadd "$www_group"
-    step_ok "创建用户组 $www_group"
-  fi
-  if id -u "$www_user" >/dev/null 2>&1; then
-    log_info "用户 $www_user 已存在"
-  else
-    useradd -g "$www_group" -s /usr/sbin/nologin -M "$www_user"
-    step_ok "创建用户 $www_user (组 $www_group, nologin)"
-  fi
-}
-
-# 准备数据目录
-prepare_dirs() {
-  mkdir -p "$wwwroot_dir/default" "$wwwlogs_dir" \
-           "$nginx_prefix/conf/vhost" "$nginx_prefix/conf/rewrite" "$nginx_prefix/conf/ssl"
-  chown -R "${www_user}:${www_group}" "$wwwroot_dir" "$wwwlogs_dir"
-  chmod -R 755 "$wwwroot_dir"
-  step_ok "创建目录: $wwwroot_dir $wwwlogs_dir"
-}
 
 # 模块名 -> configure 参数 (下载第三方源码由 download_sources 统一处理)
 module_configure_args() {
@@ -142,6 +118,7 @@ install_nginx() {
 }
 
 # 安装配置文件 / 默认站点 / systemd 服务 / logrotate
+# SKIP_CONF=1 (升级场景): 不覆盖已存在的 nginx.conf, 仅刷新缺失项与 unit
 install_nginx_conf() {
   local tmpl_dir="$LOCKLET_ROOT/config"
   local norm_mods=" ${nginx_modules//,/ } "
@@ -160,22 +137,28 @@ EOF
     *) : > "$brotli_tmp" ;;
   esac
 
-  # nginx.conf
-  sed -e "s|__WWW_USER__|${www_user}|g" \
-      -e "s|__WWWLOGS__|${wwwlogs_dir}|g" \
-      -e "s|__WWWROOT__|${wwwroot_dir}|g" \
-      -e "s|__NGINX_PREFIX__|${nginx_prefix}|g" \
-      -e "/__BROTLI_CONF__/r ${brotli_tmp}" \
-      -e "/__BROTLI_CONF__/d" \
-      "$tmpl_dir/nginx.conf.tmpl" > "$nginx_prefix/conf/nginx.conf"
+  # nginx.conf (升级时保留现有配置)
+  if [ "${SKIP_CONF:-0}" = "1" ] && [ -f "$nginx_prefix/conf/nginx.conf" ]; then
+    log_info "SKIP_CONF=1: 保留现有 nginx.conf"
+  else
+    sed -e "s|__WWW_USER__|${www_user}|g" \
+        -e "s|__WWWLOGS__|${wwwlogs_dir}|g" \
+        -e "s|__WWWROOT__|${wwwroot_dir}|g" \
+        -e "s|__NGINX_PREFIX__|${nginx_prefix}|g" \
+        -e "/__BROTLI_CONF__/r ${brotli_tmp}" \
+        -e "/__BROTLI_CONF__/d" \
+        "$tmpl_dir/nginx.conf.tmpl" > "$nginx_prefix/conf/nginx.conf"
+  fi
   rm -f "$brotli_tmp"
 
   # 默认站点 (server_name _ 占位, 防 IP 直接访问打到业务 vhost)
   sed -e "s|__WWWROOT__|${wwwroot_dir}|g" \
       "$tmpl_dir/default.conf.tmpl" > "$nginx_prefix/conf/vhost/0.default.conf"
 
-  # 默认首页
-  cp -f "$tmpl_dir/index.html.tmpl" "$wwwroot_dir/default/index.html"
+  # 默认首页 (升级时不覆盖已有页面)
+  if [ ! -f "$wwwroot_dir/default/index.html" ]; then
+    cp -f "$tmpl_dir/index.html.tmpl" "$wwwroot_dir/default/index.html"
+  fi
 
   chown -R "${www_user}:${www_group}" "$wwwroot_dir"
 

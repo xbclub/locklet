@@ -1,11 +1,11 @@
 #!/bin/bash
-# locklet 证书自动续期: 遍历 /usr/local/nginx/conf/ssl/*/renew.env 逐一续期
+# locklet 证书自动续期: 遍历 <ssl_dir>/*/renew.env 逐一续期
 # 由 lego-renew.timer 每天 03:30 调用; 续期成功后自动 reload nginx
 # 支持 http-01 (webroot) 与 dns-01 (通配符, 需 dns.env 凭证)
 set -u
 
 LEGO=/usr/local/bin/lego
-SSL_ROOT=__NGINX_PREFIX__/conf/ssl
+SSL_ROOT=__NGINX_SSL__
 RELOAD_CMD="/bin/systemctl reload nginx"
 RENEW_DAYS=30
 

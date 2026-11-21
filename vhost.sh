@@ -41,10 +41,11 @@ LOCKLET_ROOT="$(cd "$(dirname "$0")" && pwd)"
 . "$LOCKLET_ROOT/include/vhost_acme.sh"
 load_options "$LOCKLET_ROOT/options.conf"
 
-NGINX_SBIN="$nginx_prefix/sbin/nginx"
-VHOST_DIR="$nginx_prefix/conf/vhost"
-SSL_ROOT="$nginx_prefix/conf/ssl"
-REWRITE_DIR="$nginx_prefix/conf/rewrite"
+# 路径来自 options.conf (deb 模式=/etc/nginx 布局, source 模式=/usr/local/nginx 布局)
+NGINX_SBIN="$nginx_sbin"
+VHOST_DIR="$nginx_vhost_dir"
+SSL_ROOT="$nginx_ssl_dir"
+REWRITE_DIR="$nginx_rewrite_dir"
 LEGO_BIN="/usr/local/bin/lego"
 
 # CA 目录地址
